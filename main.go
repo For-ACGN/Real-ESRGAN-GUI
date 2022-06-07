@@ -2,13 +2,15 @@ package main
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
-	"time"
+	"sync"
+	"syscall"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
@@ -17,11 +19,14 @@ import (
 )
 
 func main() {
+	wd, _ := os.Getwd()
+
 	App := app.New()
 	App.Settings().SetTheme(new(theme.Chinese))
 
 	window := App.NewWindow("Real-ESRGAN-GUI")
-	window.Resize(fyne.Size{Width: 722, Height: 600})
+	window.Resize(fyne.Size{Width: 728, Height: 470})
+	window.SetFixedSize(true)
 	window.CenterOnScreen()
 
 	inputLab := widget.NewLabel("输入图片路径:")
@@ -31,9 +36,10 @@ func main() {
 	inputPath := widget.NewEntry()
 	inputPath.Move(fyne.NewPos(110, 3))
 	inputPath.Resize(fyne.Size{Width: 500, Height: 38})
+	inputPath.SetText(filepath.Join(wd, "input.png"))
 
-	inputButton := widget.NewButton("浏览文件", func() {
-		win := App.NewWindow("打开文件")
+	inputButton := widget.NewButton("浏览图片", func() {
+		win := App.NewWindow("打开图片")
 		win.Resize(fyne.Size{Width: 800, Height: 600})
 		win.SetFixedSize(true)
 		win.CenterOnScreen()
@@ -44,6 +50,7 @@ func main() {
 				return
 			}
 			path := strings.Replace(url.URI().String(), "file://", "", 1)
+			path = filepath.Clean(path)
 			inputPath.SetText(path)
 
 			win.Close()
@@ -68,9 +75,10 @@ func main() {
 	outputPath := widget.NewEntry()
 	outputPath.Move(inputPath.Position().Add(fyne.NewDelta(0, 50)))
 	outputPath.Resize(inputPath.Size())
+	outputPath.SetText(filepath.Join(wd, "output.png"))
 
-	outputButton := widget.NewButton("浏览文件", func() {
-		win := App.NewWindow("保存文件")
+	outputButton := widget.NewButton("浏览图片", func() {
+		win := App.NewWindow("保存图片")
 		win.Resize(fyne.Size{Width: 800, Height: 600})
 		win.SetFixedSize(true)
 		win.CenterOnScreen()
@@ -81,6 +89,7 @@ func main() {
 				return
 			}
 			path := strings.Replace(url.URI().String(), "file://", "", 1)
+			path = filepath.Clean(path)
 			outputPath.SetText(path)
 
 			win.Close()
@@ -127,25 +136,55 @@ func main() {
 	formatSelect.Resize(fyne.Size{Width: 80, Height: 38})
 	formatSelect.SetText(formatOptions[0])
 
-	str := ""
-	bs := binding.BindString(&str)
-
 	runText := widget.NewMultiLineEntry()
 	runText.Move(fyne.NewPos(10, 155))
-	runText.Resize(fyne.Size{Width: 610, Height: 200})
-	runText.Bind(bs)
+	runText.Resize(fyne.Size{Width: 700, Height: 297})
+	runText.Validator = nil
 
-	startButton := widget.NewButton("开始", func() {
+	startButton := widget.NewButton("开始", nil)
+	startButton.OnTapped = func() {
+		r, w, _ := os.Pipe()
+		wg := sync.WaitGroup{}
+		wg.Add(1)
 		go func() {
-			for i := 0; i < 100; i++ {
+			defer wg.Done()
+			defer func() { _ = w.Close() }()
+			cmd := exec.Command("realesrgan-ncnn-vulkan.exe",
+				"-i", inputPath.Text, "-o", outputPath.Text,
+				"-s", scaleText.Text, "-n", modelSelect.Text,
+			)
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				HideWindow: true,
+			}
+			cmd.Stdout = w
+			cmd.Stderr = w
+			_ = cmd.Run()
 
-				bs.Set(str + "aaa\n")
-
-				time.Sleep(500 * time.Millisecond)
-				runText.DragEnd()
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { _ = r.Close() }()
+			buf := make([]byte, 512)
+			for {
+				n, err := r.Read(buf)
+				if err != nil {
+					return
+				}
+				runText.SetText(runText.Text + string(buf[:n]))
+				runText.CursorRow++
+				runText.Refresh()
 			}
 		}()
-	})
+		go func() {
+			wg.Wait()
+			runText.SetText(runText.Text + "Finish\n")
+			runText.CursorRow += 2
+			runText.Refresh()
+			startButton.Enable()
+		}()
+		startButton.Disable()
+	}
 	startButton.Move(fyne.NewPos(630, 105))
 	startButton.Resize(fyne.Size{Width: 80, Height: 38})
 
