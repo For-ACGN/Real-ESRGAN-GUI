@@ -1,0 +1,1 @@
+go build -ldflags "-s -w -H windowsgui" -trimpath -o "Real-ESRGAN-GUI.exe"
